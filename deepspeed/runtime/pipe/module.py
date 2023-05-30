@@ -559,7 +559,10 @@ class PipelineModule(nn.Module):
         """Get all ckpt file list for a specific pipeline module layer. """
         idx = local_layer_idx + self._local_start
         layer_ckpt_path = os.path.join(ckpt_dir, f'layer_{idx:02d}-')
-        layer_ckpt_path += "*model_states.pt"
+        if os.environ.get('PETRELPATH', None) is not None:
+            layer_ckpt_path += "*model_states.pt.ceph"
+        else:
+            layer_ckpt_path += "*model_states.pt"
         ckpt_files = glob.glob(layer_ckpt_path)
         ckpt_files.sort()
         return ckpt_files

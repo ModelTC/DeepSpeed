@@ -136,8 +136,8 @@ class PipelineEngine(DeepSpeedEngine):
         assert isinstance(self._config.pipeline['grad_partitioned'], bool)
         self.is_pipe_partitioned = self.is_model_parallel and self._config.pipeline['pipe_partitioned']
         self.is_grad_partitioned = self.is_model_parallel and self._config.pipeline['grad_partitioned']
-        logger.info(f'is_pipe_partitioned= {self.is_pipe_partitioned}',
-                    f'is_grad_partitioned= {self.is_grad_partitioned}')
+        logger.info(f'is_pipe_partitioned= {self.is_pipe_partitioned}')
+        logger.info(f'is_grad_partitioned= {self.is_grad_partitioned}')
 
         model_parameters = filter(lambda p: p.requires_grad, self.module.parameters())
         num_params = sum([p.numel() for p in model_parameters])
@@ -309,7 +309,7 @@ class PipelineEngine(DeepSpeedEngine):
         self.grad_layer = None
         self.meta_buffer = None
 
-    def train_batch(self, data_iter=None):
+    def train_batch(self, data_iter=None, dynamic=False, sequence_parallel=False):
         """Progress the pipeline to train the next batch of data. The engine will ingest
         ``self.train_batch_size()`` total samples collectively across all workers.
 
@@ -335,6 +335,9 @@ class PipelineEngine(DeepSpeedEngine):
         """
         if not torch._C.is_grad_enabled():
             raise RuntimeError(f'train_batch() requires gradients enabled. Use eval_batch() instead.')
+        if sequence_parallel:
+            self.is_pipe_partitioned = False
+            self.is_grad_partitioned = False
 
         # Curriculum learning could change activation shape
         if self.curriculum_enabled_legacy():
@@ -349,7 +352,7 @@ class PipelineEngine(DeepSpeedEngine):
 
         if data_iter is not None:
             self.set_dataiterator(data_iter)
-
+        self.dynamic_shape = dynamic
         self.module.train()
         self.total_loss = None
         self._compute_loss = True
@@ -393,7 +396,7 @@ class PipelineEngine(DeepSpeedEngine):
         # TODO: should return precisely what loss returned and allow others to be queried?
         return self.agg_train_loss
 
-    def eval_batch(self, data_iter, return_logits=False, compute_loss=True, reduce_output='avg', bcast_loss=True):
+    def eval_batch(self, data_iter, return_logits=False, compute_loss=True, reduce_output='avg', bcast_loss=True, dynamic=False, sequence_parallel=False):
         """Evaluate the pipeline on a batch of data from ``data_iter``. The
         engine will evaluate ``self.train_batch_size()`` total samples
         collectively across all workers.
@@ -420,6 +423,9 @@ class PipelineEngine(DeepSpeedEngine):
         Returns:
             The arithmetic mean of the losses computed this batch.
         """
+        if sequence_parallel:
+            self.is_pipe_partitioned = False
+            self.is_grad_partitioned = False
         self.eval_return_logits = return_logits
         self.module.eval()
 
@@ -441,6 +447,7 @@ class PipelineEngine(DeepSpeedEngine):
         # Use the provided data iterator
         train_iterator = self.data_iterator
         self.set_dataiterator(data_iter)
+        self.dynamic_shape = dynamic
 
         # Do the work
         sched = schedule.InferenceSchedule(micro_batches=self.micro_batches,
@@ -695,10 +702,14 @@ class PipelineEngine(DeepSpeedEngine):
                 self.outputs = outputs
             if isinstance(self.loss, torch.Tensor):
                 self.fwd_outputs.append(self.loss.detach())
+                if not (self._compute_loss and self.module.loss_fn is not None):
+                    labels = self.pipe_buffers['labels'][buffer_id]
+                    self.fwd_outputs.append(labels)
 
                 if self.total_loss is None:
                     self.total_loss = torch.zeros_like(self.loss)
-                self.total_loss += self.loss.detach()
+                if self._compute_loss and self.module.loss_fn is not None:
+                    self.total_loss += self.loss.detach()
             else:
                 self.fwd_outputs.append([l.detach() for l in self.loss])
 
@@ -1336,6 +1347,8 @@ class PipelineEngine(DeepSpeedEngine):
         # For each step in the schedule
         for step_cmds in pipe_schedule:
             # For each instruction in the step
+            if hasattr(self, 'dynamic_shape') and self.dynamic_shape:
+                self.reset_activation_shape()
             for cmd in step_cmds:
                 if type(cmd) not in self._INSTRUCTION_MAP:
                     raise RuntimeError(f'{self.__class__.__name__} does not understand instruction {repr(cmd)}')

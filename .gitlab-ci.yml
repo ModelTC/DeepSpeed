@@ -1,0 +1,14 @@
+image: "registry.sensetime.com/spring/dka:llm_pytorch1.13.1_230624"
+
+build:
+  tags:
+    - gpu
+  stage: build
+  script:
+    - pip install twine
+    - python setup.py bdist_wheel
+    - commit_hash=$(git rev-parse HEAD)
+    - mv dist/*.whl dist/deepspeed-commit$commit_hash-0.8.3-py3-none-any.whl
+    - twine upload --repository-url http://spring.sensetime.com/pypi/ dist/*.whl -u spring -p springpypi
+  only:
+    - schedules

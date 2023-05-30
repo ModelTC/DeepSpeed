@@ -17,7 +17,10 @@ class CheckpointEngine(object):
         pass
 
     def makedirs(self, path, exist_ok=False):
-        os.makedirs(path, exist_ok=exist_ok)
+        path_tmp = path
+        if "s3://" in path_tmp:
+            path_tmp = path_tmp[5:]
+        os.makedirs(path_tmp, exist_ok=exist_ok)
 
     def save(self, state_dict, path: str):
         pass

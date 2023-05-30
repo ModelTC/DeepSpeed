@@ -2626,6 +2626,28 @@ class DeepSpeedEngine(Module):
             )
         return ckpt_name
 
+    def _get_ckpt_name_ceph(self, checkpoints_path, tag, mp_placeholder=None):
+        if mp_placeholder is not None:
+            mp_rank_str = mp_placeholder
+        else:
+            mp_rank = 0 if self.mpu is None else self.mpu.get_model_parallel_rank()
+            mp_rank_str = f"{mp_rank:02d}"
+
+        if self.zero_optimization_partition_weights():
+            filename = "zero_pp_rank_{}".format(dist.get_rank(group=self.optimizer.dp_process_group))
+            ckpt_name = os.path.join(
+                checkpoints_path,
+                str(tag),
+                f"{filename}_mp_rank_{mp_rank_str}_model_states.pt.ceph",
+            )
+        else:
+            ckpt_name = os.path.join(
+                checkpoints_path,
+                str(tag),
+                "mp_rank_" + mp_rank_str + "_model_states.pt.ceph",
+            )
+        return ckpt_name
+
     def _get_optimizer_ckpt_name(self, checkpoints_path, tag, expp_rank):
         mp_rank = 0 if self.mpu is None else self.mpu.get_model_parallel_rank()
         ckpt_name = os.path.join(checkpoints_path, str(tag),
@@ -2646,8 +2668,12 @@ class DeepSpeedEngine(Module):
         return ckpt_name
 
     def _get_all_ckpt_names(self, checkpoints_path, tag):
-        # It is required that (checkpoints_path, tag) are consistent among all ranks.
-        ckpt_file_pattern = self._get_ckpt_name(checkpoints_path, tag, mp_placeholder="*")
+        if os.environ.get('PETRELPATH', None) is not None:
+            ckpt_file_pattern = self._get_ckpt_name_ceph(checkpoints_path, tag, mp_placeholder="*")
+        else:
+            # It is required that (checkpoints_path, tag) are consistent among all ranks.
+            ckpt_file_pattern = self._get_ckpt_name(checkpoints_path, tag, mp_placeholder="*")
+
         import glob
 
         ckpt_files = glob.glob(ckpt_file_pattern)
@@ -2659,6 +2685,7 @@ class DeepSpeedEngine(Module):
                         tag=None,
                         load_module_strict=True,
                         load_optimizer_states=True,
+                        load_zero=True,
                         load_lr_scheduler_states=True,
                         load_module_only=False,
                         custom_load_fn=None):
@@ -2714,9 +2741,8 @@ class DeepSpeedEngine(Module):
                                                          load_module_only=load_module_only,
                                                          custom_load_fn=custom_load_fn)
 
-        load_zero_checkpoint = load_optimizer_states and load_path is not None and (self.zero_optimization()
-                                                                                    or self.bfloat16_enabled())
-        if load_zero_checkpoint:
+        load_zero_checkpoint = self.zero_optimization() or self.bfloat16_enabled()
+        if load_zero and load_zero_checkpoint and load_path is not None:
             success = self._load_zero_checkpoint(load_dir, tag, load_optimizer_states=load_optimizer_states)
             if not success:
                 self.optimizer._restore_from_bit16_weights()
@@ -2944,8 +2970,11 @@ class DeepSpeedEngine(Module):
                                                                   bf16_mode=bf16_mode)
         for i, ckpt_name in enumerate(zero_ckpt_names):
             if not os.path.exists(ckpt_name):
+                # for ceph load
+                if os.environ.get('PETRELPATH', None) is not None and os.path.exists(ckpt_name + '.ceph'):
+                    zero_ckpt_names[i] = ckpt_name + '.ceph'
                 # transparently handle the old file pattern for optim_states
-                if "optim_states.pt" in ckpt_name:
+                elif "optim_states.pt" in ckpt_name:
                     ckpt_name_try = ckpt_name.replace("_optim_states.pt", "optim_states.pt")
                     if os.path.exists(ckpt_name_try):
                         zero_ckpt_names[i] = ckpt_name_try
@@ -3003,7 +3032,15 @@ class DeepSpeedEngine(Module):
             elif not valid:
                 logger.warning(msg)
 
-    def save_checkpoint(self, save_dir, tag=None, client_state={}, save_latest=True, exclude_frozen_parameters=False):
+    def save_checkpoint(self,
+                        save_dir,
+                        tag=None,
+                        client_state={},
+                        save_latest=True,
+                        exclude_frozen_parameters=False,
+                        base_state_not_save=False,
+                        zero_not_save=False,
+                        optim_not_save=False):
         """Save training checkpoint
 
         Arguments:
@@ -3055,6 +3092,7 @@ class DeepSpeedEngine(Module):
         # data parallel instances, so all procs should call _save_checkpoint.
         # All procs then call module_state_dict(), but only procs of data
         # parallel rank 0 save the general model params.
+        self.save_non_zero_checkpoint = (self.save_non_zero_checkpoint and (not base_state_not_save))
         if not self.has_moe_layers:
             self._create_checkpoint_file(save_dir, tag, False)
             self._save_checkpoint(save_dir,
@@ -3062,9 +3100,9 @@ class DeepSpeedEngine(Module):
                                   client_state=client_state,
                                   exclude_frozen_parameters=exclude_frozen_parameters)
 
-        if self.save_zero_checkpoint:
+        if (not zero_not_save) and self.save_zero_checkpoint:
             self._create_zero_checkpoint_files(save_dir, tag)
-            self._save_zero_checkpoint(save_dir, tag)
+            self._save_zero_checkpoint(save_dir, tag, optim_not_save=optim_not_save)
 
         if self._optimizer_has_ckpt_event_epilogue():
             self.optimizer.checkpoint_event_epilogue()
@@ -3072,7 +3110,10 @@ class DeepSpeedEngine(Module):
         # Save latest checkpoint tag
         self.checkpoint_engine.commit(tag)
         if save_latest and rank == 0:
-            with open(os.path.join(save_dir, 'latest'), 'w') as fd:
+            save_dir_tmp = save_dir
+            if "s3://" in save_dir_tmp:
+                save_dir_tmp = save_dir_tmp[5:]
+            with open(os.path.join(save_dir_tmp, 'latest'), 'w') as fd:
                 fd.write(tag)
 
         dist.barrier()
@@ -3406,9 +3447,11 @@ class DeepSpeedEngine(Module):
                 f'Warning: Could not change permissions for {dst} due to error: {e}. Continuing without changing permissions.'
             )
 
-    def _save_zero_checkpoint(self, save_path, tag):
+    def _save_zero_checkpoint(self, save_path, tag, optim_not_save=False):
         zero_checkpoint_name = self._get_zero_ckpt_name(save_path, tag)
         zero_sd = dict(optimizer_state_dict=self.optimizer.state_dict(), ds_config=self.config, ds_version=version)
+        if optim_not_save and "optim_states" in zero_checkpoint_name:
+            return
         self.checkpoint_engine.save(zero_sd, zero_checkpoint_name)
 
         if self.global_rank == 0:
