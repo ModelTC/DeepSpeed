@@ -3086,7 +3086,8 @@ class DeepSpeedEngine(Module):
             self._save_moe_checkpoint(save_dir,
                                       tag,
                                       client_state=client_state,
-                                      exclude_frozen_parameters=exclude_frozen_parameters)
+                                      exclude_frozen_parameters=exclude_frozen_parameters,
+                                      optim_not_save=optim_not_save)
 
         # We distribute the task of saving layer checkpoint files among
         # data parallel instances, so all procs should call _save_checkpoint.
@@ -3098,7 +3099,8 @@ class DeepSpeedEngine(Module):
             self._save_checkpoint(save_dir,
                                   tag,
                                   client_state=client_state,
-                                  exclude_frozen_parameters=exclude_frozen_parameters)
+                                  exclude_frozen_parameters=exclude_frozen_parameters,
+                                  optim_not_save=optim_not_save)
 
         if (not zero_not_save) and self.save_zero_checkpoint:
             self._create_zero_checkpoint_files(save_dir, tag)
@@ -3130,7 +3132,7 @@ class DeepSpeedEngine(Module):
 
         return full_state_dict
 
-    def _save_moe_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False):
+    def _save_moe_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, optim_not_save=False):
         save_path = self._get_ckpt_name(save_dir, tag)
         # A hack to save the checkpointing directory. Pipeline parallelism overrides
         # module_state_dict() and uses this path to save the model. module_state_dict()
@@ -3198,7 +3200,7 @@ class DeepSpeedEngine(Module):
 
         # Save optimizer states. They are different across each exp parallel rank.
         optimizer_state = {
-            'optimizer': self.optimizer.state_dict() if self.optimizer and not self.zero_optimization() else None
+            'optimizer': self.optimizer.state_dict() if self.optimizer and not self.zero_optimization() and not optim_not_save else None
         }
         # TODO: why use BufferedWriter not the path
         file_path = self._get_optimizer_ckpt_name(save_dir, tag, expp_rank)
@@ -3263,7 +3265,7 @@ class DeepSpeedEngine(Module):
 
         return success
 
-    def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False):
+    def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, optim_not_save=False):
 
         save_path = self._get_ckpt_name(save_dir, tag)
 
@@ -3281,7 +3283,7 @@ class DeepSpeedEngine(Module):
 
         state = dict(module=module,
                      buffer_names=self._get_buffer_names(),
-                     optimizer=self.optimizer.state_dict() if self.optimizer and not zero_optimizer_state else None,
+                     optimizer=self.optimizer.state_dict() if self.optimizer and not zero_optimizer_state and not optim_not_save else None,
                      param_shapes=self._get_zero_param_shapes() if self.optimizer and zero_optimizer_state else None,
                      frozen_param_shapes=self._get_zero_frozen_param_attributes(self._get_param_shape_func)
                      if save_frozen_param else None,
