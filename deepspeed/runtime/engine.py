@@ -3038,9 +3038,9 @@ class DeepSpeedEngine(Module):
                         client_state={},
                         save_latest=True,
                         exclude_frozen_parameters=False,
-                        base_state_not_save=False,
-                        zero_not_save=False,
-                        optim_not_save=False):
+                        save_base_state=False,
+                        save_zero=False,
+                        save_optim=False):
         """Save training checkpoint
 
         Arguments:
@@ -3087,24 +3087,24 @@ class DeepSpeedEngine(Module):
                                       tag,
                                       client_state=client_state,
                                       exclude_frozen_parameters=exclude_frozen_parameters,
-                                      optim_not_save=optim_not_save)
+                                      save_optim=save_optim)
 
         # We distribute the task of saving layer checkpoint files among
         # data parallel instances, so all procs should call _save_checkpoint.
         # All procs then call module_state_dict(), but only procs of data
         # parallel rank 0 save the general model params.
-        self.save_non_zero_checkpoint = (self.save_non_zero_checkpoint and (not base_state_not_save))
+        self.save_non_zero_checkpoint = (self.save_non_zero_checkpoint and save_base_state)
         if not self.has_moe_layers:
             self._create_checkpoint_file(save_dir, tag, False)
             self._save_checkpoint(save_dir,
                                   tag,
                                   client_state=client_state,
                                   exclude_frozen_parameters=exclude_frozen_parameters,
-                                  optim_not_save=optim_not_save)
+                                  save_optim=save_optim)
 
-        if (not zero_not_save) and self.save_zero_checkpoint:
+        if save_zero and self.save_zero_checkpoint:
             self._create_zero_checkpoint_files(save_dir, tag)
-            self._save_zero_checkpoint(save_dir, tag, optim_not_save=optim_not_save)
+            self._save_zero_checkpoint(save_dir, tag, save_optim=save_optim)
 
         if self._optimizer_has_ckpt_event_epilogue():
             self.optimizer.checkpoint_event_epilogue()
@@ -3132,7 +3132,7 @@ class DeepSpeedEngine(Module):
 
         return full_state_dict
 
-    def _save_moe_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, optim_not_save=False):
+    def _save_moe_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, save_optim=False):
         save_path = self._get_ckpt_name(save_dir, tag)
         # A hack to save the checkpointing directory. Pipeline parallelism overrides
         # module_state_dict() and uses this path to save the model. module_state_dict()
@@ -3200,7 +3200,7 @@ class DeepSpeedEngine(Module):
 
         # Save optimizer states. They are different across each exp parallel rank.
         optimizer_state = {
-            'optimizer': self.optimizer.state_dict() if self.optimizer and not self.zero_optimization() and not optim_not_save else None
+            'optimizer': self.optimizer.state_dict() if self.optimizer and not self.zero_optimization() and save_optim else None
         }
         # TODO: why use BufferedWriter not the path
         file_path = self._get_optimizer_ckpt_name(save_dir, tag, expp_rank)
@@ -3265,7 +3265,7 @@ class DeepSpeedEngine(Module):
 
         return success
 
-    def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, optim_not_save=False):
+    def _save_checkpoint(self, save_dir, tag, client_state={}, exclude_frozen_parameters=False, save_optim=False):
 
         save_path = self._get_ckpt_name(save_dir, tag)
 
@@ -3283,7 +3283,7 @@ class DeepSpeedEngine(Module):
 
         state = dict(module=module,
                      buffer_names=self._get_buffer_names(),
-                     optimizer=self.optimizer.state_dict() if self.optimizer and not zero_optimizer_state and not optim_not_save else None,
+                     optimizer=self.optimizer.state_dict() if self.optimizer and not zero_optimizer_state and save_optim else None,
                      param_shapes=self._get_zero_param_shapes() if self.optimizer and zero_optimizer_state else None,
                      frozen_param_shapes=self._get_zero_frozen_param_attributes(self._get_param_shape_func)
                      if save_frozen_param else None,
@@ -3449,10 +3449,10 @@ class DeepSpeedEngine(Module):
                 f'Warning: Could not change permissions for {dst} due to error: {e}. Continuing without changing permissions.'
             )
 
-    def _save_zero_checkpoint(self, save_path, tag, optim_not_save=False):
+    def _save_zero_checkpoint(self, save_path, tag, save_optim=True):
         zero_checkpoint_name = self._get_zero_ckpt_name(save_path, tag)
         zero_sd = dict(optimizer_state_dict=self.optimizer.state_dict(), ds_config=self.config, ds_version=version)
-        if optim_not_save and "optim_states" in zero_checkpoint_name:
+        if not save_optim and "optim_states" in zero_checkpoint_name:
             return
         self.checkpoint_engine.save(zero_sd, zero_checkpoint_name)
 
