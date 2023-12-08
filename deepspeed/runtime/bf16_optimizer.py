@@ -239,16 +239,19 @@ class BF16_Optimizer(ZeROOptimizer):
                                                      norm_type=self.norm_type)
         self._global_grad_norm = all_groups_norm
 
-        assert all_groups_norm > 0.
-        if self.clip_grad > 0.:
-            clip_tensors_by_global_norm(input_tensors=self.get_grads_for_norm(for_clipping=True),
-                                        max_norm=self.clip_grad,
-                                        global_norm=all_groups_norm,
-                                        mpu=self.mpu)
+        # assert all_groups_norm > 0.
+        if all_groups_norm > 0:
+            if self.clip_grad > 0.:
+                clip_tensors_by_global_norm(input_tensors=self.get_grads_for_norm(for_clipping=True),
+                                            max_norm=self.clip_grad,
+                                            global_norm=all_groups_norm,
+                                            mpu=self.mpu)
 
-        self.optimizer.step()
+            self.optimizer.step()
 
-        self.update_lp_params()
+            self.update_lp_params()
+        else:
+            print(f"Warning: all groups norm: {all_groups_norm}", flush=True)
 
         self.clear_hp_grads()
 
