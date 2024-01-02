@@ -12,11 +12,11 @@ except ModuleNotFoundError:
         # Will be missing from checkouts that haven't been installed (e.g., readthedocs)
         version = open('version.txt', 'r').read().strip()
     else:
-        version = "0.0.0"
+        version = "0.12.3"
     git_hash = '[none]'
     git_branch = '[none]'
 
     from .ops.op_builder.all_ops import ALL_OPS
     installed_ops = dict.fromkeys(ALL_OPS.keys(), False)
     compatible_ops = dict.fromkeys(ALL_OPS.keys(), False)
-    torch_info = {'version': "0.0", "cuda_version": "0.0", "hip_version": "0.0"}
+    torch_info = {'version': "1.13.1", "cuda_version": "11.6", "hip_version": "0.0"}
