@@ -383,6 +383,9 @@ class PipelineModule(nn.Module):
         elif method == 'parameters':
             param_counts = self._count_layer_params()
             self.parts = ds_utils.partition_balanced(weights=param_counts, num_parts=num_stages)
+        elif "manual" in method:
+            self.parts = method.split("manual:")[1].split(',')
+            self.parts = [int(item) for item in self.parts]
         elif method.startswith('type:'):
             layertype = method.split(':')[1]
             binary_weights = [0] * len(self._layer_specs)
