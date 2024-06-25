@@ -248,6 +248,11 @@ class PipeModelDataParallelTopology(ProcessTopology):
         super().__init__(axes=['pipe', 'data', 'model'], dims=[num_pp, num_dp, num_mp])
 
 
+class PipeContextModelDataParallelTopology(ProcessTopology):
+    def __init__(self, num_pp, num_mp, num_dp, num_cp):
+        super().__init__(axes=['pipe', 'data', 'context', 'model'], dims=[num_pp, num_dp, num_cp, num_mp])
+
+
 class PipelineParallelGrid:
     """Implements a grid object that stores the data parallel ranks
     corresponding to each of the model parallel stages
@@ -291,6 +296,7 @@ class PipelineParallelGrid:
         self.data_parallel_size = max(self._topo.get_dim('data'), 1)
         self.pipe_parallel_size = max(self._topo.get_dim('pipe'), 1)
         self.model_parallel_size = max(self._topo.get_dim('model'), 1)
+        self.context_parallel_size = max(self._topo.get_dim('context'), 1)
         self.slice_parallel_size = self.model_parallel_size
         assert self._is_grid_valid(), "Invalid Grid"
 
