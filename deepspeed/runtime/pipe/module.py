@@ -592,6 +592,10 @@ class PipelineModule(nn.Module):
 
         checkpoint_engine.makedirs(save_dir, exist_ok=True)
         for idx, layer in enumerate(layer_list):
+            if "context" in self._grid._topo.get_axis_names():
+                ax_rank = getattr(self._grid._topo.get_coord(rank=self.global_rank), "context")
+                if ax_rank != 0:
+                    continue
             model_ckpt_path = self.ckpt_layer_path(save_dir, start + idx)
             if not hasattr(layer, 'state_dict'):
                 continue

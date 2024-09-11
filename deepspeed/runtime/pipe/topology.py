@@ -89,6 +89,8 @@ class ProcessTopology:
         """
         omit_axes = frozenset(omit_axes)
         axes = [a for a in self.get_axis_names() if a not in omit_axes]
+        # filter context axe
+        axes = [a for a in axes if a != "context"]
         names = []
         for ax in axes:
             ax_rank = getattr(self.get_coord(rank=rank), ax)
